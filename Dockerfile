@@ -30,11 +30,11 @@ RUN install2.r \
 
 # create Python virtual environment used by the OHDSI PatientLevelPrediction R package
 ENV WORKON_HOME="/opt/.virtualenvs"
-RUN R <<EOF
-reticulate::use_python("/usr/bin/python3", required=T)
-PatientLevelPrediction::configurePython(envname='r-reticulate', envtype='python')
-reticulate::use_virtualenv("/opt/.virtualenvs/r-reticulate")
-EOF
+RUN R <<EOF \
+	reticulate::use_python("/usr/bin/python3", required=T) \
+	PatientLevelPrediction::configurePython(envname='r-reticulate', envtype='python') \
+	reticulate::use_virtualenv("/opt/.virtualenvs/r-reticulate") \
+	EOF
 
 # install shiny and other R packages used by the OHDSI PatientLevelPrediction R package viewPLP() function
 # and additional model related R packages
@@ -51,14 +51,14 @@ RUN install2.r \
 
 # install the jdbc drivers for database access using the OHDSI DatabaseConnector R package
 ENV DATABASECONNECTOR_JAR_FOLDER="/opt/hades/jdbc_drivers"
-RUN R <<EOF
-library(DatabaseConnector);
-downloadJdbcDrivers('postgresql');
-downloadJdbcDrivers('redshift');
-downloadJdbcDrivers('sql server');
-downloadJdbcDrivers('oracle');
-downloadJdbcDrivers('spark');
-EOF
+RUN R <<EOF \
+library(DatabaseConnector); \
+	downloadJdbcDrivers('postgresql'); \
+	downloadJdbcDrivers('redshift'); \
+	downloadJdbcDrivers('sql server'); \
+	downloadJdbcDrivers('oracle'); \
+	downloadJdbcDrivers('spark'); \
+	EOF
 
 # Install Rserve server and client
 RUN install2.r \
