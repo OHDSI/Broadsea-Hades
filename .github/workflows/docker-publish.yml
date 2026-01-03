@@ -126,8 +126,8 @@ jobs:
             HADES_VERSION=${{ steps.version.outputs.version }}
           secrets: |
             build_github_pat=${{ secrets.GH_TOKEN }}
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           platforms: linux/amd64
           provenance: false
 
