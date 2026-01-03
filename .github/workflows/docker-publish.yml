@@ -134,13 +134,17 @@ jobs:
       - name: Generate build summary
         run: |
           if [ "${{ steps.version.outputs.tag_latest }}" = "true" ]; then
-            TAGS_TEXT="- \`${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}\`
-- \`${{ env.DOCKER_IMAGE }}:latest\`"
-            PULL_TEXT="docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}
-docker pull ${{ env.DOCKER_IMAGE }}:latest"
+            TAGS_TEXT=$(printf '%s\n' \
+              "- \`${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}\`" \
+              "- \`${{ env.DOCKER_IMAGE }}:latest\`")
+            PULL_TEXT=$(printf '%s\n' \
+              "docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}" \
+              "docker pull ${{ env.DOCKER_IMAGE }}:latest")
           else
-            TAGS_TEXT="- \`${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}\`"
-            PULL_TEXT="docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}"
+            TAGS_TEXT=$(printf '%s\n' \
+              "- \`${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}\`")
+            PULL_TEXT=$(printf '%s\n' \
+              "docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}")
           fi
 
           cat >> $GITHUB_STEP_SUMMARY << EOF
