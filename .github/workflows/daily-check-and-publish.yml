@@ -1,0 +1,151 @@
+name: Daily HADES Version Check and Build
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+env:
+  DOCKER_IMAGE: ohdsi/broadsea-hades
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest HADES version
+        id: latest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x ./scripts/get-latest-hades-version.sh
+          LATEST_VERSION=$(./scripts/get-latest-hades-version.sh)
+          echo "version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "Latest HADES version: ${LATEST_VERSION}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Check if image exists on Docker Hub
+        id: check
+        run: |
+          # Check if this version already exists on Docker Hub (authenticated to avoid rate limits)
+          if docker manifest inspect ${{ env.DOCKER_IMAGE }}:${{ steps.latest.outputs.version }} > /tmp/manifest.json 2> /tmp/manifest.err; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✓ Image ${{ env.DOCKER_IMAGE }}:${{ steps.latest.outputs.version }} already exists"
+          else
+            if grep -Eqi "manifest unknown|not found" /tmp/manifest.err; then
+              echo "exists=false" >> $GITHUB_OUTPUT
+              echo "Image ${{ env.DOCKER_IMAGE }}:${{ steps.latest.outputs.version }} does not exist - will build"
+            else
+              echo "ERROR: Docker Hub manifest check failed:" >&2
+              cat /tmp/manifest.err >&2
+              exit 1
+            fi
+          fi
+
+      - name: Skip build if image exists
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          echo "Image for HADES ${{ steps.latest.outputs.version }} already exists on Docker Hub"
+          echo "Skipping build. Job complete."
+          exit 0
+
+      - name: Set up QEMU
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate and get R version
+        if: steps.check.outputs.exists == 'false'
+        id: validate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x ./scripts/find-hades-lockfile.sh ./scripts/get-r-version.sh
+          LOCK_DIR=$(./scripts/find-hades-lockfile.sh ${{ steps.latest.outputs.version }})
+          echo "lockdir=${LOCK_DIR}" >> $GITHUB_OUTPUT
+
+          R_VERSION=$(./scripts/get-r-version.sh ${{ steps.latest.outputs.version }})
+          echo "rversion=${R_VERSION}" >> $GITHUB_OUTPUT
+
+          echo "✅ Found renv.lock in directory: ${LOCK_DIR}"
+          echo "✅ R version: ${R_VERSION}"
+
+      - name: Extract metadata for Docker
+        if: steps.check.outputs.exists == 'false'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.latest.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.authors=Lee Evans <evans@ohdsi.org>
+            org.opencontainers.image.vendor=OHDSI
+            org.opencontainers.image.title=Broadsea HADES
+            org.opencontainers.image.description=OHDSI HADES R packages in RStudio
+            org.opencontainers.image.source=https://github.com/OHDSI/Broadsea-Hades
+            org.opencontainers.image.url=https://github.com/OHDSI/Broadsea-Hades
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ steps.latest.outputs.version }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.ohdsi.hades.r.version=${{ steps.validate.outputs.rversion }}
+
+      - name: Build and push Docker image
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          pull: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            R_VERSION=${{ steps.validate.outputs.rversion }}
+            HADES_VERSION=${{ steps.latest.outputs.version }}
+          secrets: |
+            build_github_pat=${{ secrets.GH_TOKEN }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          platforms: linux/amd64
+          provenance: false
+
+      - name: Generate build summary
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## New HADES Version Built and Published
+
+          **Image:** \`${{ env.DOCKER_IMAGE }}\`
+          **HADES Version:** \`${{ steps.latest.outputs.version }}\` (NEW)
+          **R Version:** \`${{ steps.validate.outputs.rversion }}\`
+          **renv.lock Directory:** \`${{ steps.validate.outputs.lockdir }}\`
+
+          **Tags:**
+          - \`${{ env.DOCKER_IMAGE }}:${{ steps.latest.outputs.version }}\`
+          - \`${{ env.DOCKER_IMAGE }}:latest\`
+
+          ### Pull Commands
+          \`\`\`bash
+          docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.latest.outputs.version }}
+          docker pull ${{ env.DOCKER_IMAGE }}:latest
+          \`\`\`
+          EOF

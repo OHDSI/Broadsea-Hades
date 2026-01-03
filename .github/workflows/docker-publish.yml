@@ -1,0 +1,166 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.19.0) - leave empty for latest'
+        required: false
+        type: string
+
+env:
+  DOCKER_IMAGE: ohdsi/broadsea-hades
+  DOCKERFILE: Dockerfile
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Extract version from tag or input
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          TAG_LATEST=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            # If no version specified, discover latest
+            if [ -z "$VERSION" ]; then
+              echo "No version specified, discovering latest HADES version..."
+              chmod +x ./scripts/get-latest-hades-version.sh
+              LATEST=$(./scripts/get-latest-hades-version.sh)
+              VERSION="$LATEST"
+              TAG_LATEST=true
+              echo "Using latest HADES version: ${VERSION}"
+            fi
+          else
+            # Remove 'v' prefix from tag (e.g., v1.19.0 -> 1.19.0)
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+
+          if [ -z "${LATEST:-}" ]; then
+            chmod +x ./scripts/get-latest-hades-version.sh
+            LATEST=$(./scripts/get-latest-hades-version.sh)
+          fi
+
+          if [ "$VERSION" = "$LATEST" ]; then
+            TAG_LATEST=true
+          fi
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "latest=${LATEST}" >> $GITHUB_OUTPUT
+          echo "tag_latest=${TAG_LATEST}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Validate HADES version and find renv.lock
+        id: validate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "Validating HADES version ${{ steps.version.outputs.version }}..."
+          chmod +x ./scripts/find-hades-lockfile.sh ./scripts/get-r-version.sh
+          LOCK_DIR=$(./scripts/find-hades-lockfile.sh ${{ steps.version.outputs.version }})
+          echo "lockdir=${LOCK_DIR}" >> $GITHUB_OUTPUT
+          echo "✅ Found renv.lock in directory: ${LOCK_DIR}"
+          echo "Lock file URL: https://github.com/OHDSI/Hades/blob/main/hadesWideReleases/${LOCK_DIR}/renv.lock"
+
+          # Extract R version from renv.lock
+          R_VERSION=$(./scripts/get-r-version.sh ${{ steps.version.outputs.version }})
+          echo "rversion=${R_VERSION}" >> $GITHUB_OUTPUT
+          echo "✅ R version for this HADES release: ${R_VERSION}"
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.tag_latest == 'true' }}
+          labels: |
+            org.opencontainers.image.authors=Lee Evans <evans@ohdsi.org>
+            org.opencontainers.image.vendor=OHDSI
+            org.opencontainers.image.title=Broadsea HADES
+            org.opencontainers.image.description=OHDSI HADES R packages in RStudio
+            org.opencontainers.image.source=https://github.com/OHDSI/Broadsea-Hades
+            org.opencontainers.image.url=https://github.com/OHDSI/Broadsea-Hades
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.ohdsi.hades.r.version=${{ steps.validate.outputs.rversion }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE }}
+          push: true
+          pull: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            R_VERSION=${{ steps.validate.outputs.rversion }}
+            HADES_VERSION=${{ steps.version.outputs.version }}
+          secrets: |
+            build_github_pat=${{ secrets.GH_TOKEN }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+          platforms: linux/amd64
+          provenance: false
+
+      - name: Generate build summary
+        run: |
+          if [ "${{ steps.version.outputs.tag_latest }}" = "true" ]; then
+            TAGS_TEXT="- \`${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}\`
+- \`${{ env.DOCKER_IMAGE }}:latest\`"
+            PULL_TEXT="docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}
+docker pull ${{ env.DOCKER_IMAGE }}:latest"
+          else
+            TAGS_TEXT="- \`${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}\`"
+            PULL_TEXT="docker pull ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.version }}"
+          fi
+
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## Docker Image Published Successfully
+
+          **Image:** \`${{ env.DOCKER_IMAGE }}\`
+          **HADES Version:** \`${{ steps.version.outputs.version }}\`
+          **renv.lock Directory:** \`${{ steps.validate.outputs.lockdir }}\`
+
+          **Tags:**
+          ${TAGS_TEXT}
+
+          ### Pull Commands
+          \`\`\`bash
+          ${PULL_TEXT}
+          \`\`\`
+
+          ### Build Details
+          - **HADES_VERSION:** ${{ steps.version.outputs.version }}
+          - **R_VERSION:** ${{ steps.validate.outputs.rversion }}
+          - **Base Image:** rocker/rstudio:${{ steps.validate.outputs.rversion }}
+          - **Lock File:** [hadesWideReleases/${{ steps.validate.outputs.lockdir }}/renv.lock](https://github.com/OHDSI/Hades/blob/main/hadesWideReleases/${{ steps.validate.outputs.lockdir }}/renv.lock)
+          EOF

@@ -7,11 +7,10 @@ volumes:
 services:
 
   broadsea-hades:
-    build:
-      context: .
-      secrets:
-        - build_github_pat
-    image: ohdsi/broadsea-hades:4.2.1
+    # Use pre-built image from Docker Hub or build locally with ./build.sh
+    # To build: ./build.sh [HADES version]
+    # To run: docker-compose up -d
+    image: ohdsi/broadsea-hades:${HADES_VERSION:-latest}
     container_name: rstudio
     ports:
       - "8787:8787"  # RStudio server http and websocket connections
@@ -20,8 +19,5 @@ services:
       - rstudiohome:/home
       - rstudiotmp:/tmp
     environment:
-      - PASSWORD=mypass
-
-secrets:
-  build_github_pat:
-    file: GITHUBPAT.txt
+      - PASSWORD=${RSTUDIO_PASSWORD:-mypass}
+    restart: unless-stopped
