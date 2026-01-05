@@ -1,13 +1,10 @@
 name: Build and Push Docker Image
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number (e.g., 1.19.0) - leave empty for latest'
+        description: 'HADES version (e.g., 1.19.0) - leave empty for latest'
         required: false
         type: string
 
@@ -38,41 +35,30 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      - name: Extract version from tag or input
+      - name: Determine HADES version
         id: version
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          chmod +x ./scripts/get-latest-hades-version.sh
+          LATEST=$(./scripts/get-latest-hades-version.sh)
+
+          VERSION="${{ github.event.inputs.version }}"
           TAG_LATEST=false
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
-            # If no version specified, discover latest
-            if [ -z "$VERSION" ]; then
-              echo "No version specified, discovering latest HADES version..."
-              chmod +x ./scripts/get-latest-hades-version.sh
-              LATEST=$(./scripts/get-latest-hades-version.sh)
-              VERSION="$LATEST"
-              TAG_LATEST=true
-              echo "Using latest HADES version: ${VERSION}"
-            fi
-          else
-            # Remove 'v' prefix from tag (e.g., v1.19.0 -> 1.19.0)
-            VERSION=${GITHUB_REF#refs/tags/v}
-          fi
 
-          if [ -z "${LATEST:-}" ]; then
-            chmod +x ./scripts/get-latest-hades-version.sh
-            LATEST=$(./scripts/get-latest-hades-version.sh)
-          fi
-
-          if [ "$VERSION" = "$LATEST" ]; then
+          # If no version specified, use latest
+          if [ -z "$VERSION" ]; then
+            echo "No version specified, using latest HADES version..."
+            VERSION="$LATEST"
+            TAG_LATEST=true
+          elif [ "$VERSION" = "$LATEST" ]; then
             TAG_LATEST=true
           fi
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "latest=${LATEST}" >> $GITHUB_OUTPUT
           echo "tag_latest=${TAG_LATEST}" >> $GITHUB_OUTPUT
-          echo "Building version: ${VERSION}"
+          echo "Building HADES version: ${VERSION}"
 
       - name: Validate HADES version and find renv.lock
         id: validate
